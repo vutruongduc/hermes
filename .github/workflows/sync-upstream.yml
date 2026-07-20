@@ -1,0 +1,51 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'vutruongduc/hermes'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out fork main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --no-tags origin main
+          git fetch --no-tags upstream main
+          git checkout -B main origin/main
+
+          if git merge-base --is-ancestor upstream/main main; then
+            echo "Fork main already contains upstream main." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! git merge --no-edit --no-ff upstream/main; then
+            echo "Upstream merge has conflicts. No changes were pushed." >> "$GITHUB_STEP_SUMMARY"
+            git status --short
+            exit 1
+          fi
+
+          git push origin main
+          echo "Merged upstream/main into fork main with a normal push." >> "$GITHUB_STEP_SUMMARY"

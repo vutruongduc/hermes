@@ -1,9 +1,8 @@
-"""Regression: installer/bootstrap must recover from diverged managed clones.
+"""Regression: installer/bootstrap must preserve diverged managed clones.
 
 When ``~/.hermes/hermes-agent`` has local-only commits (or diverged history),
-``git pull --ff-only`` fails with exit 128 and bootstrap aborts at the
-repository stage. ``hermes update`` already resets to ``origin/$BRANCH`` in
-that case; both installer scripts must do the same.
+``git pull --ff-only`` fails with exit 128. Both installer scripts must stop
+without resetting local commits to ``origin/$BRANCH``.
 
 Fixes the bootstrap failure seen in #53257 and desktop update paths that run
 ``install.ps1`` / ``install.sh`` non-interactively.
@@ -41,27 +40,21 @@ def _extract_install_ps1_branch_update_block() -> str:
     return match["block"]
 
 
-def test_install_sh_resets_when_ff_only_pull_fails() -> None:
+def test_install_sh_stops_without_reset_when_ff_only_pull_fails() -> None:
     block = _extract_install_sh_update_block()
 
     assert 'git pull --ff-only origin "$BRANCH"' in block
-    assert 'git reset --hard "origin/$BRANCH"' in block
-    assert "Fast-forward not possible" in block
-
-    pull_idx = block.find('git pull --ff-only origin "$BRANCH"')
-    reset_idx = block.find('git reset --hard "origin/$BRANCH"')
-    assert pull_idx != -1 and reset_idx != -1
-    assert pull_idx < reset_idx, "ff-only pull must be attempted before reset fallback"
+    assert 'git reset --hard "origin/$BRANCH"' not in block
+    assert "Update refused" in block
+    assert "Local commits and files were not reset" in block
+    assert "exit 1" in block
 
 
-def test_install_ps1_resets_when_ff_only_pull_fails() -> None:
+def test_install_ps1_stops_without_reset_when_ff_only_pull_fails() -> None:
     block = _extract_install_ps1_branch_update_block()
 
     assert "pull --ff-only origin $Branch" in block
-    assert 'reset --hard "origin/$Branch"' in block
-    assert "Fast-forward not possible" in block
-
-    pull_idx = block.find("pull --ff-only origin $Branch")
-    reset_idx = block.find('reset --hard "origin/$Branch"')
-    assert pull_idx != -1 and reset_idx != -1
-    assert pull_idx < reset_idx, "ff-only pull must be attempted before reset fallback"
+    assert 'reset --hard "origin/$Branch"' not in block
+    assert "Update refused" in block
+    assert "Local commits and files were not reset" in block
+    assert "throw" in block

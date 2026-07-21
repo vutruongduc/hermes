@@ -7030,7 +7030,7 @@ def _sync_fork_with_upstream(git_cmd: list[str], cwd: Path) -> bool:
     """
     try:
         result = subprocess.run(
-            git_cmd + ["push", "origin", "main", "--force-with-lease"],
+            git_cmd + ["push", "origin", "main"],
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -10275,26 +10275,12 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 text=True,
             )
             if pull_result.returncode != 0:
-                # ff-only failed — local and remote have diverged (e.g. upstream
-                # force-pushed or rebase).  Since local changes are already
-                # stashed, reset to match the remote exactly.
-                print(
-                    "  ⚠ Fast-forward not possible (history diverged), resetting to match remote..."
-                )
-                reset_result = subprocess.run(
-                    git_cmd + ["reset", "--hard", f"origin/{branch}"],
-                    cwd=PROJECT_ROOT,
-                    capture_output=True,
-                    text=True,
-                )
-                if reset_result.returncode != 0:
-                    print(f"✗ Failed to reset to origin/{branch}.")
-                    if reset_result.stderr.strip():
-                        print(f"  {reset_result.stderr.strip()}")
-                    print(
-                        f"  Try manually: git fetch origin && git reset --hard origin/{branch}"
-                    )
-                    sys.exit(1)
+                print("✗ Fast-forward not possible; update stopped without changing HEAD.")
+                if pull_result.stderr.strip():
+                    print(f"  {pull_result.stderr.strip().splitlines()[0]}")
+                print("  Local and remote history have diverged.")
+                print("  Merge or rebase your local commits, then run `hermes update` again.")
+                sys.exit(1)
 
             # Post-pull syntax guard: validate critical-path files actually
             # parse before declaring the update successful. If a bad commit

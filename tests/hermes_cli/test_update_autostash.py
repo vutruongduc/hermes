@@ -524,14 +524,13 @@ def test_install_heartbeat_prints_when_dependency_install_is_silent(monkeypatch,
 
 
 # ---------------------------------------------------------------------------
-# ff-only fallback to reset --hard on diverged history
+# Diverged history must stop without resetting local commits
 # ---------------------------------------------------------------------------
 
 def _make_update_side_effect(
     current_branch="main",
     commit_count="3",
     ff_only_fails=False,
-    reset_fails=False,
     fetch_fails=False,
     fetch_stderr="",
 ):
@@ -559,31 +558,30 @@ def _make_update_side_effect(
                     returncode=128,
                 )
             return SimpleNamespace(stdout="Updating abc..def\n", stderr="", returncode=0)
-        if "reset" in joined and "--hard" in joined:
-            if reset_fails:
-                return SimpleNamespace(stdout="", stderr="error: unable to write\n", returncode=1)
-            return SimpleNamespace(stdout="HEAD is now at abc123\n", stderr="", returncode=0)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     return side_effect, recorded
 
 
-def test_cmd_update_falls_back_to_reset_when_ff_only_fails(monkeypatch, tmp_path, capsys):
-    """When --ff-only fails (diverged history), update resets to origin/{branch}."""
+def test_cmd_update_aborts_without_reset_when_ff_only_fails(monkeypatch, tmp_path, capsys):
+    """Diverged history must leave local commits unchanged for manual resolution."""
     _setup_update_mocks(monkeypatch, tmp_path)
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/uv" if name == "uv" else None)
 
     side_effect, recorded = _make_update_side_effect(ff_only_fails=True)
     monkeypatch.setattr(hermes_main.subprocess, "run", side_effect)
 
-    hermes_main.cmd_update(SimpleNamespace())
+    with pytest.raises(SystemExit, match="1"):
+        hermes_main.cmd_update(SimpleNamespace())
 
     reset_calls = [c for c in recorded if "reset" in c and "--hard" in c]
-    assert len(reset_calls) == 1
-    assert reset_calls[0] == ["git", "reset", "--hard", "origin/main"]
+    assert reset_calls == []
+    assert not any("pip" in c and "install" in c for c in recorded)
+    assert not any(c and c[0] in {"systemctl", "launchctl"} for c in recorded)
 
     out = capsys.readouterr().out
-    assert "Fast-forward not possible" in out
+    assert "update stopped without changing HEAD" in out
+    assert "Merge or rebase your local commits" in out
 
 
 def test_cmd_update_no_reset_when_ff_only_succeeds(monkeypatch, tmp_path):
@@ -598,6 +596,20 @@ def test_cmd_update_no_reset_when_ff_only_succeeds(monkeypatch, tmp_path):
 
     reset_calls = [c for c in recorded if "reset" in c and "--hard" in c]
     assert len(reset_calls) == 0
+
+
+def test_sync_fork_uses_non_force_push(monkeypatch, tmp_path):
+    """A fork sync must fail safely when origin/main is not fast-forwardable."""
+    recorded = []
+
+    def fake_run(cmd, **kwargs):
+        recorded.append(cmd)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hermes_main.subprocess, "run", fake_run)
+
+    assert hermes_main._sync_fork_with_upstream(["git"], tmp_path) is True
+    assert recorded == [["git", "push", "origin", "main"]]
 
 
 # ---------------------------------------------------------------------------
@@ -743,11 +755,11 @@ def test_cmd_update_auth_error_shows_friendly_message(monkeypatch, tmp_path, cap
 
 
 # ---------------------------------------------------------------------------
-# reset --hard failure — don't attempt stash restore
+# Failed fast-forward keeps the pre-update stash for manual recovery
 # ---------------------------------------------------------------------------
 
-def test_cmd_update_skips_stash_restore_when_reset_fails(monkeypatch, tmp_path, capsys):
-    """When reset --hard fails, stash restore is skipped with a helpful message."""
+def test_cmd_update_preserves_stash_when_ff_only_fails(monkeypatch, tmp_path, capsys):
+    """When histories diverge, stashed changes remain available for recovery."""
     _setup_update_mocks(monkeypatch, tmp_path)
     # Re-enable stash so it actually returns a ref
     monkeypatch.setattr(
@@ -760,7 +772,7 @@ def test_cmd_update_skips_stash_restore_when_reset_fails(monkeypatch, tmp_path, 
         lambda *a, **kw: restore_calls.append(1) or True,
     )
 
-    side_effect, _ = _make_update_side_effect(ff_only_fails=True, reset_fails=True)
+    side_effect, recorded = _make_update_side_effect(ff_only_fails=True)
     monkeypatch.setattr(hermes_main.subprocess, "run", side_effect)
 
     with pytest.raises(SystemExit, match="1"):
@@ -768,6 +780,7 @@ def test_cmd_update_skips_stash_restore_when_reset_fails(monkeypatch, tmp_path, 
 
     # Stash restore should NOT have been called
     assert len(restore_calls) == 0
+    assert not any("reset" in c and "--hard" in c for c in recorded)
 
     out = capsys.readouterr().out
     assert "preserved in stash" in out

@@ -1514,15 +1514,17 @@ function Install-Repository {
                 } else {
                     git -c windows.appendAtomically=false checkout $Branch
                     if ($LASTEXITCODE -ne 0) { throw "git checkout $Branch failed (exit $LASTEXITCODE)" }
-                    # Managed installs should follow origin/$Branch exactly. If
-                    # the checkout has diverged (or has local-only commits),
-                    # ff-only pull cannot succeed -- mirror ``hermes update`` and
-                    # reset to the fetched remote so bootstrap/install can recover.
+                    # Managed installs follow origin/$Branch only when the update
+                    # is a fast-forward. Preserve local commits on divergence.
                     git -c windows.appendAtomically=false pull --ff-only origin $Branch
                     if ($LASTEXITCODE -ne 0) {
-                        Write-Warn "Fast-forward not possible; resetting managed install to origin/$Branch..."
-                        git -c windows.appendAtomically=false reset --hard "origin/$Branch"
-                        if ($LASTEXITCODE -ne 0) { throw "git reset --hard origin/$Branch failed (exit $LASTEXITCODE)" }
+                        Write-Err "Update refused: fast-forward not possible; local history has diverged."
+                        Write-Err "Local commits and files were not reset."
+                        Write-Err "Inspect with: git log --oneline origin/$Branch..HEAD"
+                        if ($autostashRef) {
+                            Write-Err "Local changes remain stashed as $autostashRef; restore with: git stash apply"
+                        }
+                        throw "Update refused: local history diverged from origin/$Branch."
                     }
                 }
 

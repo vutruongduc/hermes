@@ -217,6 +217,22 @@ the competing PRs into plugins against that interface.
 source .venv/bin/activate   # or: source venv/bin/activate
 ```
 
+## Update Safety
+
+- Keep `hermes update` fast-forward-only. If `git pull --ff-only` fails, stop
+  with a non-zero exit and leave the current branch and `HEAD` unchanged.
+- Never repair update divergence with `git reset --hard origin/<branch>` or a
+  force-push. Preserve local commits and require the user to merge or rebase
+  the histories explicitly.
+- Fork synchronization may push only with `git push origin main`. A rejected
+  non-fast-forward push is a safe stop, not permission to rewrite the fork.
+- Before changing updater Git behavior, add a regression test that proves a
+  failed fast-forward does not invoke reset, dependency installation, or a
+  service restart. Also prove that fork sync does not add a force flag.
+- When a runtime appears stale, compare local `HEAD`, `origin/main`,
+  `upstream/main`, and the reflog before changing source or restarting a
+  service. A service restart does not synchronize Git history.
+
 `scripts/run_tests.sh` probes `.venv` first, then `venv`, then
 `$HOME/.hermes/hermes-agent/venv` (for worktrees that share a venv with the
 main checkout).

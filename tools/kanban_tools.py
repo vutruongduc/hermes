@@ -1211,6 +1211,12 @@ def _handle_create(args: dict, **kw) -> str:
         return tool_error(bool_error)
     idempotency_key = args.get("idempotency_key")
     max_runtime_seconds = args.get("max_runtime_seconds")
+    max_retries = args.get("max_retries")
+    if max_retries is not None:
+        if isinstance(max_retries, bool) or not isinstance(max_retries, int):
+            return tool_error("max_retries must be an integer >= 1")
+        if max_retries < 1:
+            return tool_error("max_retries must be >= 1")
     initial_status = args.get("initial_status") or "running"
     skills = args.get("skills")
     if isinstance(skills, str):
@@ -1265,6 +1271,7 @@ def _handle_create(args: dict, **kw) -> str:
                     if max_runtime_seconds is not None else None
                 ),
                 skills=skills,
+                max_retries=max_retries,
                 goal_mode=goal_mode,
                 goal_max_turns=(
                     int(goal_max_turns) if goal_max_turns is not None else None
@@ -1278,6 +1285,7 @@ def _handle_create(args: dict, **kw) -> str:
             return _ok(
                 task_id=new_tid,
                 status=new_task.status if new_task else None,
+                max_retries=new_task.max_retries if new_task else None,
                 subscribed=subscribed,
             )
         finally:
@@ -1931,6 +1939,16 @@ KANBAN_CREATE_SCHEMA = {
                     "Per-task runtime cap. When exceeded, the "
                     "dispatcher SIGTERMs the worker and re-queues the "
                     "task with outcome='timed_out'."
+                ),
+            },
+            "max_retries": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "Per-task failure limit. The task blocks on the Nth "
+                    "abnormal worker outcome. Set 1 to block on the first "
+                    "failure with no automatic retry. Omit to use the "
+                    "dispatcher-level failure limit."
                 ),
             },
             "initial_status": {

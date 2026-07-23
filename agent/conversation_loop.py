@@ -674,6 +674,25 @@ def run_conversation(
     # Commentary deduplication spans all provider continuations and tool calls
     # within one user turn, but must not suppress the same phrase next turn.
     agent._delivered_interim_texts = set()
+    agent._kanban_terminal_tool = None
+    agent._kanban_ownership_lost_reason = None
+    _kanban_worker = bool(os.environ.get("HERMES_KANBAN_TASK"))
+    if not _kanban_worker:
+        os.environ.pop("HERMES_ITERATIONS_REMAINING", None)
+        os.environ.pop("HERMES_MAX_ITERATIONS", None)
+
+    def _sync_kanban_iteration_env() -> None:
+        if not _kanban_worker:
+            return
+        os.environ["HERMES_ITERATIONS_REMAINING"] = str(
+            max(0, int(agent.iteration_budget.remaining))
+        )
+        budget_max = getattr(
+            agent.iteration_budget,
+            "max_total",
+            agent.max_iterations,
+        )
+        os.environ["HERMES_MAX_ITERATIONS"] = str(int(budget_max))
 
     # Main conversation loop counters (pure locals consumed by the loop below).
     api_call_count = 0
@@ -722,6 +741,19 @@ def run_conversation(
         )
 
     while (api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0) or agent._budget_grace_call:
+        _sync_kanban_iteration_env()
+        from tools.kanban_tools import current_worker_ownership_error
+
+        ownership_error = current_worker_ownership_error()
+        if ownership_error:
+            agent._kanban_ownership_lost_reason = ownership_error
+            _turn_exit_reason = "kanban_ownership_lost"
+            final_response = (
+                "This Kanban worker stopped because it no longer owns the "
+                f"active task run: {ownership_error}."
+            )
+            break
+
         # Reset per-turn checkpoint dedup so each iteration can take one snapshot
         agent._checkpoint_mgr.new_turn()
 
@@ -743,10 +775,12 @@ def run_conversation(
         if agent._budget_grace_call:
             agent._budget_grace_call = False
         elif not agent.iteration_budget.consume():
+            _sync_kanban_iteration_env()
             _turn_exit_reason = "budget_exhausted"
             if not agent.quiet_mode:
                 agent._safe_print(f"\n⚠️  Iteration budget exhausted ({agent.iteration_budget.used}/{agent.iteration_budget.max_total} iterations used)")
             break
+        _sync_kanban_iteration_env()
 
         # Fire step_callback for gateway hooks (agent:step event)
         if agent.step_callback is not None:
@@ -5095,6 +5129,28 @@ def run_conversation(
                         pass
 
                 agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
+
+                terminal_tool = getattr(agent, "_kanban_terminal_tool", None)
+                if terminal_tool:
+                    _turn_exit_reason = f"kanban_terminal({terminal_tool})"
+                    final_response = (
+                        "Kanban task closed successfully via "
+                        f"`{terminal_tool}`."
+                    )
+                    break
+
+                ownership_error = getattr(
+                    agent,
+                    "_kanban_ownership_lost_reason",
+                    None,
+                )
+                if ownership_error:
+                    _turn_exit_reason = "kanban_ownership_lost"
+                    final_response = (
+                        "This Kanban worker stopped because it no longer owns "
+                        f"the active task run: {ownership_error}."
+                    )
+                    break
 
                 if agent._tool_guardrail_halt_decision is not None:
                     decision = agent._tool_guardrail_halt_decision

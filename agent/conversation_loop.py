@@ -31,7 +31,7 @@ from agent.codex_responses_adapter import _summarize_user_message_for_log
 from agent.conversation_compression import conversation_history_after_compression
 from agent.display import KawaiiSpinner
 from agent.error_classifier import FailoverReason, classify_api_error
-from agent.iteration_budget import IterationBudget
+from agent.iteration_budget import IterationBudget, effective_iteration_state
 from agent.turn_context import (
     _compression_warrants_another_preflight_pass,
     build_turn_context,
@@ -684,15 +684,13 @@ def run_conversation(
     def _sync_kanban_iteration_env() -> None:
         if not _kanban_worker:
             return
-        os.environ["HERMES_ITERATIONS_REMAINING"] = str(
-            max(0, int(agent.iteration_budget.remaining))
-        )
-        budget_max = getattr(
+        _, effective_remaining, effective_max = effective_iteration_state(
             agent.iteration_budget,
-            "max_total",
             agent.max_iterations,
+            api_call_count,
         )
-        os.environ["HERMES_MAX_ITERATIONS"] = str(int(budget_max))
+        os.environ["HERMES_ITERATIONS_REMAINING"] = str(effective_remaining)
+        os.environ["HERMES_MAX_ITERATIONS"] = str(effective_max)
 
     # Main conversation loop counters (pure locals consumed by the loop below).
     api_call_count = 0
